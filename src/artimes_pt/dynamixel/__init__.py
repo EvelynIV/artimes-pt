@@ -12,12 +12,22 @@ from .control_adapter import (
     rad_command_stream_to_position_stream,
     yaw_rad_to_position,
 )
+from .control_loop import (
+    CONTROL_FREQUENCY_HZ,
+    CONTROL_PERIOD_SEC,
+    ControlLoopState,
+    LatestValueControlLoop,
+)
 from .contronller import DualDynamixelController, DynamixelConfig
 
 __all__ = [
+    "CONTROL_FREQUENCY_HZ",
+    "CONTROL_PERIOD_SEC",
+    "ControlLoopState",
     "COUNTS_PER_REV",
     "DualDynamixelController",
     "DynamixelConfig",
+    "LatestValueControlLoop",
     "PITCH_ZERO_POSITION",
     "PitchYawCommand",
     "PitchYawControlAdapter",
