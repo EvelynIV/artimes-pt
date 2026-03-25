@@ -37,7 +37,7 @@ def validate_command(command: np.ndarray) -> np.ndarray:
     return target.copy()
 
 
-def build_demo_commands() -> list[np.ndarray]:
+def build_demo_waypoints() -> list[np.ndarray]:
     commands = [
         np.array([0.25, 0.00], dtype=np.float64),
         np.array([0.25, -0.80], dtype=np.float64),
@@ -48,6 +48,31 @@ def build_demo_commands() -> list[np.ndarray]:
         np.array([0.00, 0.00], dtype=np.float64),
     ]
     return [validate_command(command) for command in commands]
+
+
+def build_demo_commands(
+    update_hz: float = 5.0,
+    segment_duration_sec: float = 1.0,
+) -> tuple[list[np.ndarray], float]:
+    if update_hz <= 0.0:
+        raise ValueError(f"update_hz must be > 0, got {update_hz}")
+    if segment_duration_sec <= 0.0:
+        raise ValueError(
+            f"segment_duration_sec must be > 0, got {segment_duration_sec}"
+        )
+
+    waypoints = build_demo_waypoints()
+    interval_sec = 1.0 / update_hz
+    steps_per_segment = max(1, int(round(segment_duration_sec * update_hz)))
+    commands = [waypoints[0].copy()]
+
+    for start, end in zip(waypoints[:-1], waypoints[1:], strict=True):
+        for step in range(1, steps_per_segment + 1):
+            alpha = step / steps_per_segment
+            command = ((1.0 - alpha) * start) + (alpha * end)
+            commands.append(validate_command(command))
+
+    return commands, interval_sec
 
 
 def producer_worker(
@@ -81,14 +106,29 @@ def print_state(tag: str, loop: LatestValueControlLoop) -> None:
     print("-" * 60)
 
 
+def wait_for_initial_state(
+    loop: LatestValueControlLoop,
+    timeout_sec: float,
+    poll_interval_sec: float = 0.05,
+) -> bool:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        state = loop.get_state()
+        if state.latest_state is not None:
+            return True
+        time.sleep(poll_interval_sec)
+    return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Send one target per second to the real Dynamixel control loop."
     )
     parser.add_argument("--device", default="COM9")
     parser.add_argument("--baudrate", type=int, default=57600)
-    parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--frequency", type=float, default=20.0)
+    parser.add_argument("--update-hz", type=float, default=5.0)
+    parser.add_argument("--segment-duration", type=float, default=1.0)
     parser.add_argument("--max-errors", type=int, default=3)
     args = parser.parse_args()
 
@@ -98,21 +138,28 @@ def main() -> None:
         period_sec=1.0 / args.frequency,
         max_consecutive_errors=args.max_errors,
     )
-    commands = build_demo_commands()
+    commands, interval_sec = build_demo_commands(
+        update_hz=args.update_hz,
+        segment_duration_sec=args.segment_duration,
+    )
 
     producer = threading.Thread(
         target=producer_worker,
-        args=(loop, commands, args.interval),
+        args=(loop, commands, interval_sec),
         name="external-command-producer",
         daemon=False,
     )
 
     loop.start()
+    if wait_for_initial_state(loop, timeout_sec=max(interval_sec, 1.0)):
+        print_state("[initial]", loop)
+    else:
+        print_state("[initial-timeout]", loop)
     producer.start()
 
     try:
         for index in range(1, len(commands) + 1):
-            time.sleep(args.interval)
+            time.sleep(interval_sec)
             print_state(f"[observe {index}]", loop)
     finally:
         producer.join()

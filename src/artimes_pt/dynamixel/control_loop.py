@@ -7,18 +7,12 @@ from typing import Optional, Protocol
 
 import numpy as np
 
-from .control_adapter import HOME_TARGET_RADIANS, PitchYawControlAdapter, PitchYawFeedback
+from .control_adapter import PitchYawControlAdapter, PitchYawFeedback
 from .contronller import DynamixelConfig
 
 CONTROL_FREQUENCY_HZ = 100.0
 CONTROL_PERIOD_SEC = 1.0 / CONTROL_FREQUENCY_HZ
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
-DEFAULT_HOMING_FREQUENCY_HZ = 5.0
-DEFAULT_HOMING_PERIOD_SEC = 1.0 / DEFAULT_HOMING_FREQUENCY_HZ
-DEFAULT_HOMING_TOLERANCE_RAD = 0.05
-DEFAULT_HOMING_STABLE_CYCLES = 3
-DEFAULT_HOMING_MAX_DURATION_SEC = 10.0
-DEFAULT_HOMING_MAX_CONSECUTIVE_ERRORS = 8
 
 
 def _validate_target(target_rad: np.ndarray) -> np.ndarray:
@@ -65,11 +59,6 @@ class LatestValueControlLoop:
         config: DynamixelConfig | None = None,
         period_sec: float = CONTROL_PERIOD_SEC,
         max_consecutive_errors: int = DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        homing_period_sec: float = DEFAULT_HOMING_PERIOD_SEC,
-        homing_tolerance_rad: float = DEFAULT_HOMING_TOLERANCE_RAD,
-        homing_stable_cycles: int = DEFAULT_HOMING_STABLE_CYCLES,
-        homing_max_duration_sec: float = DEFAULT_HOMING_MAX_DURATION_SEC,
-        homing_max_consecutive_errors: int = DEFAULT_HOMING_MAX_CONSECUTIVE_ERRORS,
     ) -> None:
         if period_sec <= 0.0:
             raise ValueError(f"period_sec must be > 0, got {period_sec}")
@@ -77,32 +66,12 @@ class LatestValueControlLoop:
             raise ValueError(
                 f"max_consecutive_errors must be > 0, got {max_consecutive_errors}"
             )
-        if homing_period_sec <= 0.0:
-            raise ValueError(f"homing_period_sec must be > 0, got {homing_period_sec}")
-        if homing_tolerance_rad < 0.0:
-            raise ValueError(f"homing_tolerance_rad must be >= 0, got {homing_tolerance_rad}")
-        if homing_stable_cycles <= 0:
-            raise ValueError(f"homing_stable_cycles must be > 0, got {homing_stable_cycles}")
-        if homing_max_duration_sec <= 0.0:
-            raise ValueError(
-                f"homing_max_duration_sec must be > 0, got {homing_max_duration_sec}"
-            )
-        if homing_max_consecutive_errors <= 0:
-            raise ValueError(
-                "homing_max_consecutive_errors must be > 0, "
-                f"got {homing_max_consecutive_errors}"
-            )
         if adapter is not None and config is not None:
             raise ValueError("adapter and config cannot be provided at the same time")
 
         self._adapter = adapter if adapter is not None else PitchYawControlAdapter(config)
         self._period_sec = float(period_sec)
         self._max_consecutive_errors = int(max_consecutive_errors)
-        self._homing_period_sec = float(homing_period_sec)
-        self._homing_tolerance_rad = float(homing_tolerance_rad)
-        self._homing_stable_cycles = int(homing_stable_cycles)
-        self._homing_max_duration_sec = float(homing_max_duration_sec)
-        self._homing_max_consecutive_errors = int(homing_max_consecutive_errors)
         self._state_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -112,9 +81,6 @@ class LatestValueControlLoop:
         self._latest_state: Optional[np.ndarray] = None
         self._latest_telemetry: Optional[np.ndarray] = None
         self._latest_pitch_out_of_range: Optional[bool] = None
-        self._homing_active = True
-        self._homing_started_at: float | None = None
-        self._homing_stable_counter = 0
         self._last_write_ok: Optional[bool] = None
         self._last_telemetry_ok: Optional[bool] = None
         self._last_error: Optional[str] = None
@@ -154,9 +120,6 @@ class LatestValueControlLoop:
             self._worker_error = None
             with self._state_lock:
                 self._is_faulted = False
-                self._homing_active = True
-                self._homing_started_at = None
-                self._homing_stable_counter = 0
             self._thread = threading.Thread(
                 target=self._run,
                 name="dynamixel-control-loop",
@@ -185,7 +148,6 @@ class LatestValueControlLoop:
         target = _validate_target(target_rad)
         with self._state_lock:
             self._latest_target = target
-            self._homing_active = False
 
     def get_latest_target(self) -> Optional[np.ndarray]:
         return self.latest_target
@@ -242,18 +204,17 @@ class LatestValueControlLoop:
 
         try:
             self._adapter.open()
+            self._read_feedback_only()
             while not self._stop_event.is_set():
-                command, period_sec, error_threshold, is_homing_step = self._select_operation_for_tick()
+                command = self._select_operation_for_tick()
                 if command is not None:
-                    feedback = self._execute_control_step(
+                    self._execute_control_step(
                         command,
-                        max_consecutive_errors=error_threshold,
+                        max_consecutive_errors=self._max_consecutive_errors,
                     )
-                    if is_homing_step:
-                        self._update_homing_progress(feedback)
                 self._record_tick()
 
-                next_tick += period_sec
+                next_tick += self._period_sec
                 remaining = next_tick - time.monotonic()
                 if remaining > 0.0:
                     self._stop_event.wait(remaining)
@@ -266,27 +227,17 @@ class LatestValueControlLoop:
         finally:
             self._adapter.close()
 
-    def _select_operation_for_tick(self) -> tuple[Optional[np.ndarray], float, int, bool]:
+    def _select_operation_for_tick(self) -> Optional[np.ndarray]:
         with self._state_lock:
             if self._latest_target is not None:
                 command = self._latest_target.copy()
                 self._last_target = command.copy()
-                return command, self._period_sec, self._max_consecutive_errors, False
+                return command
 
             if self._last_target is not None:
-                return self._last_target.copy(), self._period_sec, self._max_consecutive_errors, False
+                return self._last_target.copy()
 
-            if self._homing_active:
-                if self._homing_started_at is None:
-                    self._homing_started_at = time.monotonic()
-                return (
-                    HOME_TARGET_RADIANS.copy(),
-                    self._homing_period_sec,
-                    self._homing_max_consecutive_errors,
-                    True,
-                )
-
-            return None, self._period_sec, self._max_consecutive_errors, False
+            return None
 
     def _update_feedback(
         self,
@@ -341,7 +292,28 @@ class LatestValueControlLoop:
             feedback.telemetry,
             feedback.pitch_out_of_range,
         )
-        self._record_telemetry_success()
+        self._record_telemetry_success(write_ok=True)
+        return feedback
+
+    def _read_feedback_only(self) -> Optional[PitchYawFeedback]:
+        try:
+            feedback = self._adapter.read_feedback()
+        except Exception as exc:
+            self._record_step_error(
+                write_ok=None,
+                telemetry_ok=False,
+                error=exc,
+                phase="telemetry",
+                max_consecutive_errors=self._max_consecutive_errors,
+            )
+            return None
+
+        self._update_feedback(
+            feedback.state_radians,
+            feedback.telemetry,
+            feedback.pitch_out_of_range,
+        )
+        self._record_telemetry_success(write_ok=None)
         return feedback
 
     def _record_write_success(self) -> None:
@@ -350,9 +322,9 @@ class LatestValueControlLoop:
             self._last_telemetry_ok = None
             self._last_error = None
 
-    def _record_telemetry_success(self) -> None:
+    def _record_telemetry_success(self, *, write_ok: Optional[bool]) -> None:
         with self._state_lock:
-            self._last_write_ok = True
+            self._last_write_ok = write_ok
             self._last_telemetry_ok = True
             self._last_error = None
             self._consecutive_error_count = 0
@@ -360,7 +332,7 @@ class LatestValueControlLoop:
     def _record_step_error(
         self,
         *,
-        write_ok: bool,
+        write_ok: Optional[bool],
         telemetry_ok: bool,
         error: Exception,
         phase: str,
@@ -385,32 +357,6 @@ class LatestValueControlLoop:
                 self._worker_error = fault_error
             self._stop_event.set()
 
-    def _is_homed(self, feedback: PitchYawFeedback) -> bool:
-        if feedback.pitch_out_of_range:
-            return False
-
-        error = np.abs(feedback.state_radians - HOME_TARGET_RADIANS)
-        return bool(np.all(error <= self._homing_tolerance_rad))
-
-    def _update_homing_progress(self, feedback: Optional[PitchYawFeedback]) -> None:
-        with self._state_lock:
-            if not self._homing_active:
-                return
-
-            if feedback is not None and self._is_homed(feedback):
-                self._homing_stable_counter += 1
-                if self._homing_stable_counter >= self._homing_stable_cycles:
-                    self._homing_active = False
-                    self._homing_started_at = None
-                return
-
-            self._homing_stable_counter = 0
-            if (
-                self._homing_started_at is not None
-                and time.monotonic() - self._homing_started_at >= self._homing_max_duration_sec
-            ):
-                self._homing_active = False
-
     def _record_tick(self) -> None:
         with self._state_lock:
             self._tick_count += 1
@@ -421,12 +367,6 @@ __all__ = [
     "CONTROL_FREQUENCY_HZ",
     "CONTROL_PERIOD_SEC",
     "DEFAULT_MAX_CONSECUTIVE_ERRORS",
-    "DEFAULT_HOMING_FREQUENCY_HZ",
-    "DEFAULT_HOMING_MAX_CONSECUTIVE_ERRORS",
-    "DEFAULT_HOMING_MAX_DURATION_SEC",
-    "DEFAULT_HOMING_PERIOD_SEC",
-    "DEFAULT_HOMING_STABLE_CYCLES",
-    "DEFAULT_HOMING_TOLERANCE_RAD",
     "ControlLoopState",
     "LatestValueControlLoop",
 ]
