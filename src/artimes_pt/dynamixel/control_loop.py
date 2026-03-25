@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+
 import threading
 import time
 from dataclasses import dataclass
+
 from typing import Optional, Protocol
 
 import numpy as np
+
 
 from .control_adapter import PitchYawControlAdapter, PitchYawFeedback
 from .contronller import DynamixelConfig
@@ -13,6 +16,9 @@ from .contronller import DynamixelConfig
 CONTROL_FREQUENCY_HZ = 100.0
 CONTROL_PERIOD_SEC = 1.0 / CONTROL_FREQUENCY_HZ
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
+YAW_INDEX = 1
+MAX_YAW_DIRECT_STEP_RAD = np.deg2rad(75.0)
+YAW_SLIDING_WINDOW_STEP_RAD = np.deg2rad(60.0)
 
 
 def _validate_target(target_rad: np.ndarray) -> np.ndarray:
@@ -20,6 +26,30 @@ def _validate_target(target_rad: np.ndarray) -> np.ndarray:
     if target.shape != (2,):
         raise ValueError(f"expected target shape (2,), got {target.shape}")
     return target.copy()
+
+
+def _normalize_yaw_rad(yaw_rad: float) -> float:
+    return ((yaw_rad + np.pi) % (2.0 * np.pi)) - np.pi
+
+
+def _shortest_yaw_delta_rad(current_yaw_rad: float, target_yaw_rad: float) -> float:
+    return _normalize_yaw_rad(target_yaw_rad - current_yaw_rad)
+
+
+def _build_windowed_target(target_rad: np.ndarray, present_rad: np.ndarray) -> np.ndarray:
+    command = _validate_target(target_rad)
+    present = _validate_target(present_rad)
+    yaw_delta_rad = _shortest_yaw_delta_rad(
+        float(present[YAW_INDEX]),
+        float(command[YAW_INDEX]),
+    )
+    if abs(yaw_delta_rad) <= MAX_YAW_DIRECT_STEP_RAD:
+        return command
+
+    command[YAW_INDEX] = _normalize_yaw_rad(
+        float(present[YAW_INDEX]) + np.sign(yaw_delta_rad) * YAW_SLIDING_WINDOW_STEP_RAD
+    )
+    return command
 
 
 class ControlAdapterProtocol(Protocol):
@@ -230,7 +260,13 @@ class LatestValueControlLoop:
     def _select_operation_for_tick(self) -> Optional[np.ndarray]:
         with self._state_lock:
             if self._latest_target is not None:
-                command = self._latest_target.copy()
+                if self._latest_state is None:
+                    command = self._latest_target.copy()
+                else:
+                    command = _build_windowed_target(
+                        self._latest_target,
+                        self._latest_state,
+                    )
                 self._last_target = command.copy()
                 return command
 
@@ -369,4 +405,6 @@ __all__ = [
     "DEFAULT_MAX_CONSECUTIVE_ERRORS",
     "ControlLoopState",
     "LatestValueControlLoop",
+    "MAX_YAW_DIRECT_STEP_RAD",
+    "YAW_SLIDING_WINDOW_STEP_RAD",
 ]
