@@ -9,7 +9,6 @@ import numpy as np
 from .contronller import DualDynamixelController, DynamixelConfig
 
 COUNTS_PER_REV = 4096
-HALF_TURN_RAD = math.pi
 PITCH_RANGE_RAD = math.pi / 2.0
 YAW_ZERO_POSITION = 1024
 PITCH_ZERO_POSITION = 1024
@@ -144,35 +143,18 @@ class PitchYawControlAdapter:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
-    def write_radians(self, target_radians: np.ndarray | PitchYawCommand) -> None:
-        command = (
-            target_radians.as_array()
-            if isinstance(target_radians, PitchYawCommand)
-            else target_radians
-        )
+    def _coerce_target(self, target: np.ndarray | PitchYawCommand) -> np.ndarray:
+        command = target.as_array() if isinstance(target, PitchYawCommand) else target
+        return _validate_target_radians(command)
+
+    def write_target(self, target: np.ndarray | PitchYawCommand) -> None:
+        command = self._coerce_target(target)
         self.controller.write_positions(pitch_yaw_rad_to_positions(command))
 
-    def write_and_read_radians(
-        self, target_radians: np.ndarray | PitchYawCommand
-    ) -> tuple[np.ndarray, np.ndarray]:
-        command = (
-            target_radians.as_array()
-            if isinstance(target_radians, PitchYawCommand)
-            else target_radians
-        )
-        raw_telemetry = self.controller.write_and_read(pitch_yaw_rad_to_positions(command))
-        feedback, _ = telemetry_to_pitch_yaw_feedback(raw_telemetry)
-        present_radians = feedback[:, 0].copy()
-        return present_radians, feedback
-
-    def write_and_read_feedback(
-        self, target_radians: np.ndarray | PitchYawCommand
+    def write_target_and_read_feedback(
+        self, target: np.ndarray | PitchYawCommand
     ) -> PitchYawFeedback:
-        command = (
-            target_radians.as_array()
-            if isinstance(target_radians, PitchYawCommand)
-            else target_radians
-        )
+        command = self._coerce_target(target)
         raw_telemetry = self.controller.write_and_read(pitch_yaw_rad_to_positions(command))
         telemetry, pitch_out_of_range = telemetry_to_pitch_yaw_feedback(raw_telemetry)
         return PitchYawFeedback(
@@ -190,11 +172,11 @@ class PitchYawControlAdapter:
             pitch_out_of_range=pitch_out_of_range,
         )
 
-    def stream_radians(
-        self, rad_command_stream: Iterable[np.ndarray | PitchYawCommand]
-    ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-        for target_radians in rad_command_stream:
-            yield self.write_and_read_radians(target_radians)
+    def stream_target_feedback(
+        self, target_stream: Iterable[np.ndarray | PitchYawCommand]
+    ) -> Iterator[PitchYawFeedback]:
+        for target in target_stream:
+            yield self.write_target_and_read_feedback(target)
 
 
 __all__ = [

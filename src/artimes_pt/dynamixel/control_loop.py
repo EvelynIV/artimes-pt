@@ -33,7 +33,7 @@ class ControlAdapterProtocol(Protocol):
 
     def close(self) -> None: ...
 
-    def write_radians(self, target_radians: np.ndarray) -> None: ...
+    def write_target(self, target: np.ndarray) -> None: ...
 
     def read_feedback(self) -> PitchYawFeedback: ...
 
@@ -113,7 +113,6 @@ class LatestValueControlLoop:
         self._latest_telemetry: Optional[np.ndarray] = None
         self._latest_pitch_out_of_range: Optional[bool] = None
         self._homing_active = True
-        self._homing_completed = False
         self._homing_started_at: float | None = None
         self._homing_stable_counter = 0
         self._last_write_ok: Optional[bool] = None
@@ -156,7 +155,6 @@ class LatestValueControlLoop:
             with self._state_lock:
                 self._is_faulted = False
                 self._homing_active = True
-                self._homing_completed = False
                 self._homing_started_at = None
                 self._homing_stable_counter = 0
             self._thread = threading.Thread(
@@ -278,7 +276,7 @@ class LatestValueControlLoop:
             if self._last_target is not None:
                 return self._last_target.copy(), self._period_sec, self._max_consecutive_errors, False
 
-            if self._homing_active and not self._homing_completed:
+            if self._homing_active:
                 if self._homing_started_at is None:
                     self._homing_started_at = time.monotonic()
                 return (
@@ -313,7 +311,7 @@ class LatestValueControlLoop:
             else int(max_consecutive_errors)
         )
         try:
-            self._adapter.write_radians(command)
+            self._adapter.write_target(command)
         except Exception as exc:
             self._record_step_error(
                 write_ok=False,
@@ -396,13 +394,12 @@ class LatestValueControlLoop:
 
     def _update_homing_progress(self, feedback: Optional[PitchYawFeedback]) -> None:
         with self._state_lock:
-            if not self._homing_active or self._homing_completed:
+            if not self._homing_active:
                 return
 
             if feedback is not None and self._is_homed(feedback):
                 self._homing_stable_counter += 1
                 if self._homing_stable_counter >= self._homing_stable_cycles:
-                    self._homing_completed = True
                     self._homing_active = False
                     self._homing_started_at = None
                 return
