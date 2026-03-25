@@ -3,6 +3,7 @@ from .control_adapter import (
     PITCH_ZERO_POSITION,
     YAW_ZERO_POSITION,
     PitchYawCommand,
+    PitchYawFeedback,
     PitchYawControlAdapter,
     pitch_rad_to_position,
     pitch_yaw_rad_to_positions,
@@ -10,11 +11,14 @@ from .control_adapter import (
     position_to_yaw_rad,
     positions_to_pitch_yaw_rad,
     rad_command_stream_to_position_stream,
+    telemetry_to_pitch_yaw_feedback,
+    velocity_to_pitch_yaw_rad_per_sec,
     yaw_rad_to_position,
 )
 from .control_loop import (
     CONTROL_FREQUENCY_HZ,
     CONTROL_PERIOD_SEC,
+    DEFAULT_MAX_CONSECUTIVE_ERRORS,
     ControlLoopState,
     LatestValueControlLoop,
 )
@@ -23,6 +27,7 @@ from .contronller import DualDynamixelController, DynamixelConfig
 __all__ = [
     "CONTROL_FREQUENCY_HZ",
     "CONTROL_PERIOD_SEC",
+    "DEFAULT_MAX_CONSECUTIVE_ERRORS",
     "ControlLoopState",
     "COUNTS_PER_REV",
     "DualDynamixelController",
@@ -30,6 +35,7 @@ __all__ = [
     "LatestValueControlLoop",
     "PITCH_ZERO_POSITION",
     "PitchYawCommand",
+    "PitchYawFeedback",
     "PitchYawControlAdapter",
     "YAW_ZERO_POSITION",
     "pitch_rad_to_position",
@@ -38,5 +44,7 @@ __all__ = [
     "position_to_yaw_rad",
     "positions_to_pitch_yaw_rad",
     "rad_command_stream_to_position_stream",
+    "telemetry_to_pitch_yaw_feedback",
+    "velocity_to_pitch_yaw_rad_per_sec",
     "yaw_rad_to_position",
 ]

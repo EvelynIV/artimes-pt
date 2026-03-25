@@ -81,6 +81,25 @@ def positions_to_pitch_yaw_rad(positions: np.ndarray) -> np.ndarray:
     )
 
 
+def velocity_to_pitch_yaw_rad_per_sec(velocities: np.ndarray) -> np.ndarray:
+    motor_velocities = np.asarray(velocities, dtype=np.float64)
+    if motor_velocities.shape != (2,):
+        raise ValueError(f"expected velocities shape (2,), got {motor_velocities.shape}")
+
+    return motor_velocities * RAD_PER_PULSE
+
+
+def telemetry_to_pitch_yaw_feedback(raw_telemetry: np.ndarray) -> np.ndarray:
+    telemetry = np.asarray(raw_telemetry, dtype=np.float64)
+    if telemetry.shape != (2, 5):
+        raise ValueError(f"expected raw_telemetry shape (2, 5), got {telemetry.shape}")
+
+    feedback = telemetry.copy()
+    feedback[:, 0] = positions_to_pitch_yaw_rad(telemetry[:, 0].astype(np.int64))
+    feedback[:, 1] = velocity_to_pitch_yaw_rad_per_sec(telemetry[:, 1])
+    return feedback
+
+
 def rad_command_stream_to_position_stream(
     rad_command_stream: Iterable[np.ndarray],
 ) -> Iterator[np.ndarray]:
@@ -95,6 +114,12 @@ class PitchYawCommand:
 
     def as_array(self) -> np.ndarray:
         return np.array([self.pitch, self.yaw], dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class PitchYawFeedback:
+    state_radians: np.ndarray
+    telemetry: np.ndarray
 
 
 class PitchYawControlAdapter:
@@ -132,9 +157,21 @@ class PitchYawControlAdapter:
             if isinstance(target_radians, PitchYawCommand)
             else target_radians
         )
-        telemetry = self.controller.write_and_read(pitch_yaw_rad_to_positions(command))
-        present_radians = positions_to_pitch_yaw_rad(telemetry[:, 0].astype(np.int64))
-        return present_radians, telemetry
+        raw_telemetry = self.controller.write_and_read(pitch_yaw_rad_to_positions(command))
+        feedback = telemetry_to_pitch_yaw_feedback(raw_telemetry)
+        present_radians = feedback[:, 0].copy()
+        return present_radians, feedback
+
+    def write_and_read_feedback(
+        self, target_radians: np.ndarray | PitchYawCommand
+    ) -> PitchYawFeedback:
+        state_radians, telemetry = self.write_and_read_radians(target_radians)
+        return PitchYawFeedback(state_radians=state_radians, telemetry=telemetry)
+
+    def read_feedback(self) -> PitchYawFeedback:
+        raw_telemetry = self.controller.read_telemetry()
+        telemetry = telemetry_to_pitch_yaw_feedback(raw_telemetry)
+        return PitchYawFeedback(state_radians=telemetry[:, 0].copy(), telemetry=telemetry)
 
     def stream_radians(
         self, rad_command_stream: Iterable[np.ndarray | PitchYawCommand]
@@ -148,6 +185,7 @@ __all__ = [
     "PITCH_ZERO_POSITION",
     "YAW_ZERO_POSITION",
     "PitchYawCommand",
+    "PitchYawFeedback",
     "PitchYawControlAdapter",
     "pitch_rad_to_position",
     "yaw_rad_to_position",
@@ -155,5 +193,7 @@ __all__ = [
     "position_to_yaw_rad",
     "pitch_yaw_rad_to_positions",
     "positions_to_pitch_yaw_rad",
+    "telemetry_to_pitch_yaw_feedback",
+    "velocity_to_pitch_yaw_rad_per_sec",
     "rad_command_stream_to_position_stream",
 ]
