@@ -11,68 +11,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from artimes_pt.dynamixel.control_adapter import (
-    PITCH_RANGE_RAD,
-    PitchYawControlAdapter,
-    PitchYawFeedback,
-)
+from artimes_pt.dynamixel.control_adapter import PITCH_RANGE_RAD
 from artimes_pt.dynamixel.control_loop import LatestValueControlLoop
 from artimes_pt.dynamixel.contronller import DynamixelConfig
-
-
-class ObservedPitchYawControlAdapter:
-    """Wrap the real adapter and cache the latest command/response for observation."""
-
-    def __init__(self, config: DynamixelConfig) -> None:
-        self._adapter = PitchYawControlAdapter(config)
-        self._lock = threading.Lock()
-        self._last_command: np.ndarray | None = None
-        self._last_present_radians: np.ndarray | None = None
-        self._last_telemetry: np.ndarray | None = None
-        self._last_pitch_out_of_range: bool | None = None
-        self._write_count = 0
-
-    def open(self) -> None:
-        self._adapter.open()
-
-    def close(self) -> None:
-        self._adapter.close()
-
-    def write_radians(self, target_radians: np.ndarray) -> None:
-        command = np.asarray(target_radians, dtype=np.float64).copy()
-        self._adapter.write_radians(command)
-
-        with self._lock:
-            self._last_command = command
-            self._write_count += 1
-
-    def read_feedback(self) -> PitchYawFeedback:
-        feedback = self._adapter.read_feedback()
-
-        with self._lock:
-            self._last_present_radians = feedback.state_radians.copy()
-            self._last_telemetry = feedback.telemetry.copy()
-            self._last_pitch_out_of_range = feedback.pitch_out_of_range
-
-        return PitchYawFeedback(
-            state_radians=feedback.state_radians.copy(),
-            telemetry=feedback.telemetry.copy(),
-            pitch_out_of_range=feedback.pitch_out_of_range,
-        )
-
-    def get_observation(self) -> dict[str, object]:
-        with self._lock:
-            return {
-                "last_command": None if self._last_command is None else self._last_command.copy(),
-                "last_present_radians": (
-                    None
-                    if self._last_present_radians is None
-                    else self._last_present_radians.copy()
-                ),
-                "last_telemetry": None if self._last_telemetry is None else self._last_telemetry.copy(),
-                "last_pitch_out_of_range": self._last_pitch_out_of_range,
-                "write_count": self._write_count,
-            }
 
 
 def format_array(value: np.ndarray | None) -> str:
@@ -98,11 +39,13 @@ def validate_command(command: np.ndarray) -> np.ndarray:
 
 def build_demo_commands() -> list[np.ndarray]:
     commands = [
-        np.array([0.00, 0.00], dtype=np.float64),
+        np.array([0.25, 0.00], dtype=np.float64),
         np.array([0.25, -0.80], dtype=np.float64),
         np.array([0.50, 0.00], dtype=np.float64),
         np.array([0.90, 1.20], dtype=np.float64),
         np.array([1.20, 2.80], dtype=np.float64),
+        np.array([1.00, 3.00], dtype=np.float64),
+        np.array([0.00, 0.00], dtype=np.float64),
     ]
     return [validate_command(command) for command in commands]
 
@@ -113,11 +56,29 @@ def producer_worker(
     interval_sec: float,
 ) -> None:
     for index, command in enumerate(commands, start=1):
-        validated_command = validate_command(command)
-        loop.submit_target(validated_command)
-        print(f"[producer {index}] submit command={format_array(validated_command)}")
+        loop.submit_target(command)
+        print(f"[producer {index}] submit command={format_array(command)}")
         if index < len(commands):
             time.sleep(interval_sec)
+
+
+def print_state(tag: str, loop: LatestValueControlLoop) -> None:
+    state = loop.get_state()
+    print(tag)
+    print(f"latest_target : {format_array(state.latest_target)}")
+    print(f"last_target   : {format_array(state.last_target)}")
+    print(f"latest_state  : {format_array(state.latest_state)}")
+    print(f"telemetry     : {format_array(state.latest_telemetry)}")
+    print(f"pitch_oor     : {state.latest_pitch_out_of_range}")
+    print(f"last_write_ok : {state.last_write_ok}")
+    print(f"last_telem_ok : {state.last_telemetry_ok}")
+    print(f"last_error    : {state.last_error}")
+    print(f"faulted       : {state.is_faulted}")
+    print(f"error_count   : {state.consecutive_error_count}")
+    print(f"tick_count    : {state.tick_count}")
+    print(f"last_tick     : {state.last_tick_time}")
+    print(f"worker_error  : {state.worker_error}")
+    print("-" * 60)
 
 
 def main() -> None:
@@ -127,11 +88,16 @@ def main() -> None:
     parser.add_argument("--device", default="COM9")
     parser.add_argument("--baudrate", type=int, default=57600)
     parser.add_argument("--interval", type=float, default=1.0)
+    parser.add_argument("--frequency", type=float, default=20.0)
+    parser.add_argument("--max-errors", type=int, default=3)
     args = parser.parse_args()
 
     config = DynamixelConfig(device_name=args.device, baudrate=args.baudrate, dxl_ids=(1, 2))
-    adapter = ObservedPitchYawControlAdapter(config)
-    loop = LatestValueControlLoop(adapter=adapter)
+    loop = LatestValueControlLoop(
+        config=config,
+        period_sec=1.0 / args.frequency,
+        max_consecutive_errors=args.max_errors,
+    )
     commands = build_demo_commands()
 
     producer = threading.Thread(
@@ -147,47 +113,13 @@ def main() -> None:
     try:
         for index in range(1, len(commands) + 1):
             time.sleep(args.interval)
-
-            state = loop.get_state()
-            observation = adapter.get_observation()
-            print(f"[observe {index}]")
-            print(f"latest_target : {format_array(state.latest_target)}")
-            print(f"last_target   : {format_array(state.last_target)}")
-            print(f"last_command  : {format_array(observation['last_command'])}")
-            print(f"present_rad   : {format_array(observation['last_present_radians'])}")
-            print(f"telemetry     : {format_array(observation['last_telemetry'])}")
-            print(f"pitch_oor     : {observation['last_pitch_out_of_range']}")
-            print(f"last_write_ok : {state.last_write_ok}")
-            print(f"last_telem_ok : {state.last_telemetry_ok}")
-            print(f"last_error    : {state.last_error}")
-            print(f"faulted       : {state.is_faulted}")
-            print(f"error_count   : {state.consecutive_error_count}")
-            print(f"tick_count    : {state.tick_count}")
-            print(f"last_tick     : {state.last_tick_time}")
-            print(f"write_count   : {observation['write_count']}")
-            print(f"worker_error  : {state.worker_error}")
-            print("-" * 60)
+            print_state(f"[observe {index}]", loop)
     finally:
         producer.join()
-        loop.stop()
-
-        state = loop.get_state()
-        observation = adapter.get_observation()
-        print("[final]")
-        print(f"is_running    : {state.is_running}")
-        print(f"latest_target : {format_array(state.latest_target)}")
-        print(f"last_target   : {format_array(state.last_target)}")
-        print(f"present_rad   : {format_array(observation['last_present_radians'])}")
-        print(f"telemetry     : {format_array(observation['last_telemetry'])}")
-        print(f"pitch_oor     : {observation['last_pitch_out_of_range']}")
-        print(f"last_write_ok : {state.last_write_ok}")
-        print(f"last_telem_ok : {state.last_telemetry_ok}")
-        print(f"last_error    : {state.last_error}")
-        print(f"faulted       : {state.is_faulted}")
-        print(f"error_count   : {state.consecutive_error_count}")
-        print(f"tick_count    : {state.tick_count}")
-        print(f"write_count   : {observation['write_count']}")
-        print(f"worker_error  : {state.worker_error}")
+        try:
+            loop.stop()
+        finally:
+            print_state("[final]", loop)
 
 
 if __name__ == "__main__":

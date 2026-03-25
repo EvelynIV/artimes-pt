@@ -17,6 +17,7 @@ PITCH_INDEX = 0
 YAW_INDEX = 1
 PULSE_PER_RAD = COUNTS_PER_REV / (2.0 * math.pi)
 RAD_PER_PULSE = (2.0 * math.pi) / COUNTS_PER_REV
+HOME_TARGET_RADIANS = np.array([0.0, 0.0], dtype=np.float64)
 
 
 def _normalize_yaw_rad(yaw_rad: float) -> float:
@@ -200,6 +201,7 @@ __all__ = [
     "COUNTS_PER_REV",
     "PITCH_ZERO_POSITION",
     "YAW_ZERO_POSITION",
+    "HOME_TARGET_RADIANS",
     "PitchYawCommand",
     "PitchYawFeedback",
     "PitchYawControlAdapter",
