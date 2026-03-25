@@ -29,6 +29,7 @@ class ObservedPitchYawControlAdapter:
         self._last_command: np.ndarray | None = None
         self._last_present_radians: np.ndarray | None = None
         self._last_telemetry: np.ndarray | None = None
+        self._last_pitch_out_of_range: bool | None = None
         self._write_count = 0
 
     def open(self) -> None:
@@ -51,10 +52,12 @@ class ObservedPitchYawControlAdapter:
         with self._lock:
             self._last_present_radians = feedback.state_radians.copy()
             self._last_telemetry = feedback.telemetry.copy()
+            self._last_pitch_out_of_range = feedback.pitch_out_of_range
 
         return PitchYawFeedback(
             state_radians=feedback.state_radians.copy(),
             telemetry=feedback.telemetry.copy(),
+            pitch_out_of_range=feedback.pitch_out_of_range,
         )
 
     def get_observation(self) -> dict[str, object]:
@@ -67,6 +70,7 @@ class ObservedPitchYawControlAdapter:
                     else self._last_present_radians.copy()
                 ),
                 "last_telemetry": None if self._last_telemetry is None else self._last_telemetry.copy(),
+                "last_pitch_out_of_range": self._last_pitch_out_of_range,
                 "write_count": self._write_count,
             }
 
@@ -94,7 +98,7 @@ def validate_command(command: np.ndarray) -> np.ndarray:
 
 def build_demo_commands() -> list[np.ndarray]:
     commands = [
-        np.array([0.10, -2.40], dtype=np.float64),
+        np.array([0.00, 0.00], dtype=np.float64),
         np.array([0.25, -0.80], dtype=np.float64),
         np.array([0.50, 0.00], dtype=np.float64),
         np.array([0.90, 1.20], dtype=np.float64),
@@ -152,6 +156,7 @@ def main() -> None:
             print(f"last_command  : {format_array(observation['last_command'])}")
             print(f"present_rad   : {format_array(observation['last_present_radians'])}")
             print(f"telemetry     : {format_array(observation['last_telemetry'])}")
+            print(f"pitch_oor     : {observation['last_pitch_out_of_range']}")
             print(f"last_write_ok : {state.last_write_ok}")
             print(f"last_telem_ok : {state.last_telemetry_ok}")
             print(f"last_error    : {state.last_error}")
@@ -174,6 +179,7 @@ def main() -> None:
         print(f"last_target   : {format_array(state.last_target)}")
         print(f"present_rad   : {format_array(observation['last_present_radians'])}")
         print(f"telemetry     : {format_array(observation['last_telemetry'])}")
+        print(f"pitch_oor     : {observation['last_pitch_out_of_range']}")
         print(f"last_write_ok : {state.last_write_ok}")
         print(f"last_telem_ok : {state.last_telemetry_ok}")
         print(f"last_error    : {state.last_error}")

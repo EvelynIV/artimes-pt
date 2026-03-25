@@ -42,12 +42,7 @@ def yaw_rad_to_position(yaw_rad: float) -> int:
 
 
 def position_to_pitch_rad(position: int) -> float:
-    pitch_rad = (int(position) - PITCH_ZERO_POSITION) * RAD_PER_PULSE
-    if pitch_rad < 0.0 or pitch_rad > PITCH_RANGE_RAD:
-        raise ValueError(
-            f"pitch position out of calibrated range [0, pi/2]: position={position}"
-        )
-    return pitch_rad
+    return (int(position) - PITCH_ZERO_POSITION) * RAD_PER_PULSE
 
 
 def position_to_yaw_rad(position: int) -> float:
@@ -81,6 +76,11 @@ def positions_to_pitch_yaw_rad(positions: np.ndarray) -> np.ndarray:
     )
 
 
+def pitch_position_out_of_range(position: int) -> bool:
+    pitch_rad = position_to_pitch_rad(position)
+    return pitch_rad < 0.0 or pitch_rad > PITCH_RANGE_RAD
+
+
 def velocity_to_pitch_yaw_rad_per_sec(velocities: np.ndarray) -> np.ndarray:
     motor_velocities = np.asarray(velocities, dtype=np.float64)
     if motor_velocities.shape != (2,):
@@ -89,7 +89,7 @@ def velocity_to_pitch_yaw_rad_per_sec(velocities: np.ndarray) -> np.ndarray:
     return motor_velocities * RAD_PER_PULSE
 
 
-def telemetry_to_pitch_yaw_feedback(raw_telemetry: np.ndarray) -> np.ndarray:
+def telemetry_to_pitch_yaw_feedback(raw_telemetry: np.ndarray) -> tuple[np.ndarray, bool]:
     telemetry = np.asarray(raw_telemetry, dtype=np.float64)
     if telemetry.shape != (2, 5):
         raise ValueError(f"expected raw_telemetry shape (2, 5), got {telemetry.shape}")
@@ -97,7 +97,8 @@ def telemetry_to_pitch_yaw_feedback(raw_telemetry: np.ndarray) -> np.ndarray:
     feedback = telemetry.copy()
     feedback[:, 0] = positions_to_pitch_yaw_rad(telemetry[:, 0].astype(np.int64))
     feedback[:, 1] = velocity_to_pitch_yaw_rad_per_sec(telemetry[:, 1])
-    return feedback
+    pitch_out_of_range = pitch_position_out_of_range(int(telemetry[PITCH_INDEX, 0]))
+    return feedback, pitch_out_of_range
 
 
 def rad_command_stream_to_position_stream(
@@ -120,6 +121,7 @@ class PitchYawCommand:
 class PitchYawFeedback:
     state_radians: np.ndarray
     telemetry: np.ndarray
+    pitch_out_of_range: bool
 
 
 class PitchYawControlAdapter:
@@ -158,20 +160,34 @@ class PitchYawControlAdapter:
             else target_radians
         )
         raw_telemetry = self.controller.write_and_read(pitch_yaw_rad_to_positions(command))
-        feedback = telemetry_to_pitch_yaw_feedback(raw_telemetry)
+        feedback, _ = telemetry_to_pitch_yaw_feedback(raw_telemetry)
         present_radians = feedback[:, 0].copy()
         return present_radians, feedback
 
     def write_and_read_feedback(
         self, target_radians: np.ndarray | PitchYawCommand
     ) -> PitchYawFeedback:
-        state_radians, telemetry = self.write_and_read_radians(target_radians)
-        return PitchYawFeedback(state_radians=state_radians, telemetry=telemetry)
+        command = (
+            target_radians.as_array()
+            if isinstance(target_radians, PitchYawCommand)
+            else target_radians
+        )
+        raw_telemetry = self.controller.write_and_read(pitch_yaw_rad_to_positions(command))
+        telemetry, pitch_out_of_range = telemetry_to_pitch_yaw_feedback(raw_telemetry)
+        return PitchYawFeedback(
+            state_radians=telemetry[:, 0].copy(),
+            telemetry=telemetry,
+            pitch_out_of_range=pitch_out_of_range,
+        )
 
     def read_feedback(self) -> PitchYawFeedback:
         raw_telemetry = self.controller.read_telemetry()
-        telemetry = telemetry_to_pitch_yaw_feedback(raw_telemetry)
-        return PitchYawFeedback(state_radians=telemetry[:, 0].copy(), telemetry=telemetry)
+        telemetry, pitch_out_of_range = telemetry_to_pitch_yaw_feedback(raw_telemetry)
+        return PitchYawFeedback(
+            state_radians=telemetry[:, 0].copy(),
+            telemetry=telemetry,
+            pitch_out_of_range=pitch_out_of_range,
+        )
 
     def stream_radians(
         self, rad_command_stream: Iterable[np.ndarray | PitchYawCommand]
@@ -189,6 +205,7 @@ __all__ = [
     "PitchYawControlAdapter",
     "pitch_rad_to_position",
     "yaw_rad_to_position",
+    "pitch_position_out_of_range",
     "position_to_pitch_rad",
     "position_to_yaw_rad",
     "pitch_yaw_rad_to_positions",

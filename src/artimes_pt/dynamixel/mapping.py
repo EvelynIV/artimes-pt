@@ -76,7 +76,7 @@ def timed_rad_stream(duration_sec: float, interval_sec: float = 0.03) -> Iterato
 def run_fake_dual_motor_demo(
     duration_sec: float = 10.0,
     device_name: str = "COM9",
-    baudrate: int = 57600,
+    baudrate: int =1000000,
     dxl_ids: tuple[int, int] = (1, 2),
 ) -> None:
     config = DynamixelConfig(device_name=device_name, baudrate=baudrate, dxl_ids=dxl_ids)

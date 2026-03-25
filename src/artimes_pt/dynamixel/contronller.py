@@ -17,6 +17,7 @@ from dynamixel_sdk import GroupSyncRead, GroupSyncWrite, PacketHandler, PortHand
 
 
 ADDR_OPERATING_MODE = 11
+ADDR_MAX_POSITION_LIMIT = 48
 ADDR_MIN_POSITION_LIMIT = 52
 ADDR_TORQUE_ENABLE = 64
 ADDR_GOAL_POSITION = 116
@@ -33,7 +34,9 @@ POSITION_MODE = 3
 GOAL_POSITION_LENGTH = 4
 TELEMETRY_START_ADDR = ADDR_PRESENT_CURRENT
 TELEMETRY_LENGTH = ADDR_PRESENT_TEMPERATURE - ADDR_PRESENT_CURRENT + 1
-MOTOR1_MIN_POSITION_LIMIT = 800
+COUNTS_PER_REV = 4096
+MOTOR1_MIN_POSITION_LIMIT = 1024
+MOTOR1_MAX_POSITION_LIMIT = 2048
 
 
 def _split_u32(value: int) -> list[int]:
@@ -58,7 +61,7 @@ class DynamixelConfig:
     """控制器基础配置。"""
 
     device_name: str = "COM9"
-    baudrate: int = 57600
+    baudrate: int =1000000
     dxl_ids: tuple[int, int] = (1, 2)
 
 
@@ -124,6 +127,12 @@ class DualDynamixelController:
                 self._write1(dxl_id, ADDR_TORQUE_ENABLE, TORQUE_DISABLE, "disable torque")
                 self._write1(dxl_id, ADDR_OPERATING_MODE, POSITION_MODE, "set position mode")
                 if dxl_id == self.config.dxl_ids[0]:
+                    self._write4(
+                        dxl_id,
+                        ADDR_MAX_POSITION_LIMIT,
+                        MOTOR1_MAX_POSITION_LIMIT,
+                        "set max position limit",
+                    )
                     self._write4(
                         dxl_id,
                         ADDR_MIN_POSITION_LIMIT,
