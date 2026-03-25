@@ -30,7 +30,7 @@ def validate_command(command: np.ndarray) -> np.ndarray:
     pitch = float(target[0])
     yaw = float(target[1])
     if not 0.0 <= pitch <= PITCH_RANGE_RAD:
-        raise ValueError(f"pitch must be within [0, pi/2], got {pitch}")
+        raise ValueError(f"pitch must be within [0, pi], got {pitch}")
     if not -np.pi <= yaw < np.pi:
         raise ValueError(f"yaw must be within [-pi, pi), got {yaw}")
 

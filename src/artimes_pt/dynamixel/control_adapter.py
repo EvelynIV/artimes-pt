@@ -32,7 +32,7 @@ def _validate_target_radians(target_radians: np.ndarray) -> np.ndarray:
 
 def pitch_rad_to_position(pitch_rad: float) -> int:
     if not 0.0 <= pitch_rad <= PITCH_RANGE_RAD:
-        raise ValueError(f"pitch must be within [0, pi/2], got {pitch_rad}")
+        raise ValueError(f"pitch must be within [0, pi], got {pitch_rad}")
     return int(round(PITCH_ZERO_POSITION + pitch_rad * PULSE_PER_RAD))
 
 
