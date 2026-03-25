@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+"""连续平滑转动"""
 import argparse
 import threading
 import time
